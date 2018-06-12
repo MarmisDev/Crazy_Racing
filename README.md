@@ -24,4 +24,4 @@ Crazy Racing or Balapan Nguehe is a multiplayer racing prototype with photon as 
 
 ```prototype drag racing (photon) v1.0.1```
 
-![More about photon engine ](https://lh5.googleusercontent.com/1Vnz0T1tzNBm6j3zKc5e4xwwe7rQFY0e7-jKh2iMlEWC3ZrYS00BQpLrYYC0WOdEBjZYDMoY11GUk84-kSd4=w1440-h796)
+[More about photon engine ](photonengine.com)
