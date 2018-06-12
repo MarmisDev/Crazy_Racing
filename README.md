@@ -3,7 +3,7 @@ Crazy Racing or Balapan Nguehe is a multiplayer racing prototype with photon as 
 
 ## Instructions
 ### Image
-![Image](https://lh3.googleusercontent.com/7823mavye0HvY3fpHwrB4EEjezhdKiH174Rpq0fwTL9ilvePiecyrLm0hhEJbMqLI46Khr2kqFKlwBUVjzNiOzQKB0d5RxjHLq15ul89WCW7M2VqFPHwoJoJtuNNMhdG9rfweBs4VCMkqQKRPsdUR6kLih0POzX8ctlKs8R2kfsXIp26kivmvOP-rnAVtlRhGGFZdT_OTbc-GV0Lgehv20aZlVHAae6ZmZ6VpuZ37j_zn4A-jKK0nK78ctR3ewoL81hTyhBZjwpJOQ3uvj1cTQaJj0b0_2W3yxendBHesLM4MvURT8GIK22tK-euM3jZ3-64TqXDGG8yM0pK2032-9ggGcgtA41smYRB2Us51lFOv8009mEFhZeEpAfW2by8CA07LrGAkWPPN-DRJr9JfMuJk6UGLEUjtzA_7sdscOHgk1_Iwq3_8JkkZXBIhPNDm4RLAqO1d2Vgl4JSqtu5vKJjg7HwYipwZah3MB2BOaUfcjEJyv1_fOkDJ6aw-x43m4DwO0rd5KRrdFtoz1z83aCU72zW_IMyYDp4DYFKmwM42MqysXyuVNoGKQfybVfDbTld6khlyKdM_U81N5dmKi86Bb3zlrIXtq-SQBY=w1412-h790-no)
+![Image](https://scontent-sin6-2.xx.fbcdn.net/v/t1.0-9/35239492_1735421069868293_2462470923081482240_o.jpg?_nc_cat=0&_nc_eui2=AeGKRBIwIBeDBrmnffuFF4syT80I5w7d3LBkPpuNKmqXCVBjk7kRD1Q9AV77mPbiayuzIfxzXfj5RupT_Zz6Hz6FfwCe60YqODDtY5UmyBIZ1Q&oh=306dcb5d49e93f2a39e207ecd3faeefb&oe=5BB775C0)
 - Game starts, after 2nd player joins.
 - You may see 3 buttons on the image (Throttle, Clutch & Transmission)
 - Hold **clutch** or hold **W** on keyboard and then Press **Transmission** or hold **Q**.
