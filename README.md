@@ -51,9 +51,9 @@ Real Drag Race is a PvP drag race with a photon engine as a server. this is the 
 
 
 
-## Looking for Donate
+## Early Offer
 
-**ONLY $25** you get the source with all features (include future update).
+**ONLY $55** you get the source with all features (include future update).
 
 
 [PAYPAL](https://www.paypal.me/MarmisDev)
