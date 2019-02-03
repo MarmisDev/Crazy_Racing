@@ -3735,9 +3735,13 @@ quat4.str=function(a){return"["+a[0]+", "+a[1]+", "+a[2]+", "+a[3]+"]"};
 					"powerPreference": "high-performance",
 					"failIfMajorPerformanceCaveat": true
 				};
-				this.gl = (this.canvas.getContext("webgl2", attribs) ||
-						   this.canvas.getContext("webgl", attribs) ||
-						   this.canvas.getContext("experimental-webgl", attribs));
+				if (!this.isAndroid)
+					this.gl = this.canvas.getContext("webgl2", attribs);
+				if (!this.gl)
+				{
+					this.gl = (this.canvas.getContext("webgl", attribs) ||
+							   this.canvas.getContext("experimental-webgl", attribs));
+				}
 			}
 		}
 		catch (e) {
@@ -3937,7 +3941,7 @@ quat4.str=function(a){return"["+a[0]+", "+a[1]+", "+a[2]+", "+a[3]+"]"};
 		var isfullscreen = (document["mozFullScreen"] || document["webkitIsFullScreen"] || !!document["msFullscreenElement"] || document["fullScreen"] || this.isNodeFullscreen) && !this.isCordova;
 		if (!isfullscreen && this.fullscreen_mode === 0 && !force)
 			return;			// ignore size events when not fullscreen and not using a fullscreen-in-browser mode
-		if (isfullscreen && this.fullscreen_scaling > 0)
+		if (isfullscreen)
 			mode = this.fullscreen_scaling;
 		var dpr = this.devicePixelRatio;
 		if (mode >= 4)
@@ -3991,7 +3995,7 @@ quat4.str=function(a){return"["+a[0]+", "+a[1]+", "+a[2]+", "+a[3]+"]"};
 				}
 			}
 		}
-		else if (this.isNWjs && this.isNodeFullscreen && this.fullscreen_mode_set === 0)
+		else if (isfullscreen && mode === 0)
 		{
 			offx = Math.floor((w - this.original_width) / 2);
 			offy = Math.floor((h - this.original_height) / 2);
@@ -6417,6 +6421,43 @@ quat4.str=function(a){return"["+a[0]+", "+a[1]+", "+a[2]+", "+a[3]+"]"};
 		}
 		inst.x = oldx;
 		inst.y = oldy;
+		inst.set_bbox_changed();
+		return false;
+	};
+	Runtime.prototype.pushOutSolidAxis = function(inst, xdir, ydir, dist)
+	{
+		dist = dist || 50;
+		var oldX = inst.x;
+		var oldY = inst.y;
+		var lastOverlapped = null;
+		var secondLastOverlapped = null;
+		var i, which, sign;
+		for (i = 0; i < dist; ++i)
+		{
+			for (which = 0; which < 2; ++which)
+			{
+				sign = which * 2 - 1;		// -1 or 1
+				inst.x = oldX + (xdir * i * sign);
+				inst.y = oldY + (ydir * i * sign);
+				inst.set_bbox_changed();
+				if (!this.testOverlap(inst, lastOverlapped))
+				{
+					lastOverlapped = this.testOverlapSolid(inst);
+					if (lastOverlapped)
+					{
+						secondLastOverlapped = lastOverlapped;
+					}
+					else
+					{
+						if (secondLastOverlapped)
+							this.pushInFractional(inst, xdir * sign, ydir * sign, secondLastOverlapped, 16);
+						return true;
+					}
+				}
+			}
+		}
+		inst.x = oldX;
+		inst.y = oldY;
 		inst.set_bbox_changed();
 		return false;
 	};
@@ -15046,14 +15087,13 @@ cr.system_object.prototype.loadFromJSON = function (o)
 		if (prevsol.select_all)
 		{
 			clonesol.select_all = true;
-			cr.clearArray(clonesol.else_instances);
 		}
 		else
 		{
 			clonesol.select_all = false;
 			cr.shallowAssignArray(clonesol.instances, prevsol.instances);
-			cr.shallowAssignArray(clonesol.else_instances, prevsol.else_instances);
 		}
+		cr.clearArray(clonesol.else_instances);
 	};
 	cr.type_popSol = function ()
 	{
@@ -15168,6 +15208,808 @@ cr.system_object.prototype.loadFromJSON = function (o)
 	};
 })();
 cr.shaders = {};
+;
+;
+cr.plugins_.Browser = function(runtime)
+{
+	this.runtime = runtime;
+};
+(function ()
+{
+	var pluginProto = cr.plugins_.Browser.prototype;
+	pluginProto.Type = function(plugin)
+	{
+		this.plugin = plugin;
+		this.runtime = plugin.runtime;
+	};
+	var typeProto = pluginProto.Type.prototype;
+	typeProto.onCreate = function()
+	{
+	};
+	var offlineScriptReady = false;
+	var browserPluginReady = false;
+	document.addEventListener("DOMContentLoaded", function ()
+	{
+		if (window["C2_RegisterSW"] && navigator["serviceWorker"])
+		{
+			var offlineClientScript = document.createElement("script");
+			offlineClientScript.onload = function ()
+			{
+				offlineScriptReady = true;
+				checkReady()
+			};
+			offlineClientScript.src = "offlineClient.js";
+			document.head.appendChild(offlineClientScript);
+		}
+	});
+	var browserInstance = null;
+	typeProto.onAppBegin = function ()
+	{
+		browserPluginReady = true;
+		checkReady();
+	};
+	function checkReady()
+	{
+		if (offlineScriptReady && browserPluginReady && window["OfflineClientInfo"])
+		{
+			window["OfflineClientInfo"]["SetMessageCallback"](function (e)
+			{
+				browserInstance.onSWMessage(e);
+			});
+		}
+	};
+	pluginProto.Instance = function(type)
+	{
+		this.type = type;
+		this.runtime = type.runtime;
+	};
+	var instanceProto = pluginProto.Instance.prototype;
+	instanceProto.onCreate = function()
+	{
+		var self = this;
+		window.addEventListener("resize", function () {
+			self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnResize, self);
+		});
+		browserInstance = this;
+		if (typeof navigator.onLine !== "undefined")
+		{
+			window.addEventListener("online", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnOnline, self);
+			});
+			window.addEventListener("offline", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnOffline, self);
+			});
+		}
+		if (!this.runtime.isDirectCanvas)
+		{
+			document.addEventListener("appMobi.device.update.available", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnUpdateReady, self);
+			});
+			document.addEventListener("backbutton", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnBackButton, self);
+			});
+			document.addEventListener("menubutton", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnMenuButton, self);
+			});
+			document.addEventListener("searchbutton", function() {
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnSearchButton, self);
+			});
+			document.addEventListener("tizenhwkey", function (e) {
+				var ret;
+				switch (e["keyName"]) {
+				case "back":
+					ret = self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnBackButton, self);
+					if (!ret)
+					{
+						if (window["tizen"])
+							window["tizen"]["application"]["getCurrentApplication"]()["exit"]();
+					}
+					break;
+				case "menu":
+					ret = self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnMenuButton, self);
+					if (!ret)
+						e.preventDefault();
+					break;
+				}
+			});
+		}
+		if (this.runtime.isWindows10 && typeof Windows !== "undefined")
+		{
+			Windows["UI"]["Core"]["SystemNavigationManager"]["getForCurrentView"]().addEventListener("backrequested", function (e)
+			{
+				var ret = self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnBackButton, self);
+				if (ret)
+					e["handled"] = true;
+		    });
+		}
+		else if (this.runtime.isWinJS && WinJS["Application"])
+		{
+			WinJS["Application"]["onbackclick"] = function (e)
+			{
+				return !!self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnBackButton, self);
+			};
+		}
+		this.runtime.addSuspendCallback(function(s) {
+			if (s)
+			{
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnPageHidden, self);
+			}
+			else
+			{
+				self.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnPageVisible, self);
+			}
+		});
+		this.is_arcade = (typeof window["is_scirra_arcade"] !== "undefined");
+	};
+	instanceProto.onSWMessage = function (e)
+	{
+		var messageType = e["data"]["type"];
+		if (messageType === "downloading-update")
+			this.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnUpdateFound, this);
+		else if (messageType === "update-ready" || messageType === "update-pending")
+			this.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnUpdateReady, this);
+		else if (messageType === "offline-ready")
+			this.runtime.trigger(cr.plugins_.Browser.prototype.cnds.OnOfflineReady, this);
+	};
+	var batteryManager = null;
+	var loadedBatteryManager = false;
+	function maybeLoadBatteryManager()
+	{
+		if (loadedBatteryManager)
+			return;
+		if (!navigator["getBattery"])
+			return;
+		var promise = navigator["getBattery"]();
+		loadedBatteryManager = true;
+		if (promise)
+		{
+			promise.then(function (manager) {
+				batteryManager = manager;
+			});
+		}
+	};
+	function Cnds() {};
+	Cnds.prototype.CookiesEnabled = function()
+	{
+		return navigator ? navigator.cookieEnabled : false;
+	};
+	Cnds.prototype.IsOnline = function()
+	{
+		return navigator ? navigator.onLine : false;
+	};
+	Cnds.prototype.HasJava = function()
+	{
+		return navigator ? navigator.javaEnabled() : false;
+	};
+	Cnds.prototype.OnOnline = function()
+	{
+		return true;
+	};
+	Cnds.prototype.OnOffline = function()
+	{
+		return true;
+	};
+	Cnds.prototype.IsDownloadingUpdate = function ()
+	{
+		return false;		// deprecated
+	};
+	Cnds.prototype.OnUpdateReady = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.PageVisible = function ()
+	{
+		return !this.runtime.isSuspended;
+	};
+	Cnds.prototype.OnPageVisible = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnPageHidden = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnResize = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.IsFullscreen = function ()
+	{
+		return !!(document["mozFullScreen"] || document["webkitIsFullScreen"] || document["fullScreen"] || this.runtime.isNodeFullscreen);
+	};
+	Cnds.prototype.OnBackButton = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnMenuButton = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnSearchButton = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.IsMetered = function ()
+	{
+		var connection = navigator["connection"] || navigator["mozConnection"] || navigator["webkitConnection"];
+		if (!connection)
+			return false;
+		return !!connection["metered"];
+	};
+	Cnds.prototype.IsCharging = function ()
+	{
+		var battery = navigator["battery"] || navigator["mozBattery"] || navigator["webkitBattery"];
+		if (battery)
+		{
+			return !!battery["charging"]
+		}
+		else
+		{
+			maybeLoadBatteryManager();
+			if (batteryManager)
+			{
+				return !!batteryManager["charging"];
+			}
+			else
+			{
+				return true;		// if unknown, default to charging (powered)
+			}
+		}
+	};
+	Cnds.prototype.IsPortraitLandscape = function (p)
+	{
+		var current = (window.innerWidth <= window.innerHeight ? 0 : 1);
+		return current === p;
+	};
+	Cnds.prototype.SupportsFullscreen = function ()
+	{
+		if (this.runtime.isNodeWebkit)
+			return true;
+		var elem = this.runtime.canvasdiv || this.runtime.canvas;
+		return !!(elem["requestFullscreen"] || elem["mozRequestFullScreen"] || elem["msRequestFullscreen"] || elem["webkitRequestFullScreen"]);
+	};
+	Cnds.prototype.OnUpdateFound = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnUpdateReady = function ()
+	{
+		return true;
+	};
+	Cnds.prototype.OnOfflineReady = function ()
+	{
+		return true;
+	};
+	pluginProto.cnds = new Cnds();
+	function Acts() {};
+	Acts.prototype.Alert = function (msg)
+	{
+		if (!this.runtime.isDomFree)
+			alert(msg.toString());
+	};
+	Acts.prototype.Close = function ()
+	{
+		if (this.runtime.isCocoonJs)
+			CocoonJS["App"]["forceToFinish"]();
+		else if (window["tizen"])
+			window["tizen"]["application"]["getCurrentApplication"]()["exit"]();
+		else if (navigator["app"] && navigator["app"]["exitApp"])
+			navigator["app"]["exitApp"]();
+		else if (navigator["device"] && navigator["device"]["exitApp"])
+			navigator["device"]["exitApp"]();
+		else if (!this.is_arcade && !this.runtime.isDomFree)
+			window.close();
+	};
+	Acts.prototype.Focus = function ()
+	{
+		if (this.runtime.isNodeWebkit)
+		{
+			var win = window["nwgui"]["Window"]["get"]();
+			win["focus"]();
+		}
+		else if (!this.is_arcade && !this.runtime.isDomFree)
+			window.focus();
+	};
+	Acts.prototype.Blur = function ()
+	{
+		if (this.runtime.isNodeWebkit)
+		{
+			var win = window["nwgui"]["Window"]["get"]();
+			win["blur"]();
+		}
+		else if (!this.is_arcade && !this.runtime.isDomFree)
+			window.blur();
+	};
+	Acts.prototype.GoBack = function ()
+	{
+		if (navigator["app"] && navigator["app"]["backHistory"])
+			navigator["app"]["backHistory"]();
+		else if (!this.is_arcade && !this.runtime.isDomFree && window.back)
+			window.back();
+	};
+	Acts.prototype.GoForward = function ()
+	{
+		if (!this.is_arcade && !this.runtime.isDomFree && window.forward)
+			window.forward();
+	};
+	Acts.prototype.GoHome = function ()
+	{
+		if (!this.is_arcade && !this.runtime.isDomFree && window.home)
+			window.home();
+	};
+	Acts.prototype.GoToURL = function (url, target)
+	{
+		if (this.runtime.isCocoonJs)
+			CocoonJS["App"]["openURL"](url);
+		else if (this.runtime.isEjecta)
+			ejecta["openURL"](url);
+		else if (this.runtime.isWinJS)
+			Windows["System"]["Launcher"]["launchUriAsync"](new Windows["Foundation"]["Uri"](url));
+		else if (navigator["app"] && navigator["app"]["loadUrl"])
+			navigator["app"]["loadUrl"](url, { "openExternal": true });
+		else if (this.runtime.isCordova)
+			window.open(url, "_system");
+		else if (!this.is_arcade && !this.runtime.isDomFree)
+		{
+			if (target === 2 && !this.is_arcade)		// top
+				window.top.location = url;
+			else if (target === 1 && !this.is_arcade)	// parent
+				window.parent.location = url;
+			else					// self
+				window.location = url;
+		}
+	};
+	Acts.prototype.GoToURLWindow = function (url, tag)
+	{
+		if (this.runtime.isCocoonJs)
+			CocoonJS["App"]["openURL"](url);
+		else if (this.runtime.isEjecta)
+			ejecta["openURL"](url);
+		else if (this.runtime.isWinJS)
+			Windows["System"]["Launcher"]["launchUriAsync"](new Windows["Foundation"]["Uri"](url));
+		else if (navigator["app"] && navigator["app"]["loadUrl"])
+			navigator["app"]["loadUrl"](url, { "openExternal": true });
+		else if (this.runtime.isCordova)
+			window.open(url, "_system");
+		else if (!this.is_arcade && !this.runtime.isDomFree)
+			window.open(url, tag);
+	};
+	Acts.prototype.Reload = function ()
+	{
+		if (!this.is_arcade && !this.runtime.isDomFree)
+			window.location.reload();
+	};
+	var firstRequestFullscreen = true;
+	var crruntime = null;
+	function onFullscreenError(e)
+	{
+		if (console && console.warn)
+			console.warn("Fullscreen request failed: ", e);
+		crruntime["setSize"](window.innerWidth, window.innerHeight);
+	};
+	Acts.prototype.RequestFullScreen = function (stretchmode)
+	{
+		if (this.runtime.isDomFree)
+		{
+			cr.logexport("[Construct 2] Requesting fullscreen is not supported on this platform - the request has been ignored");
+			return;
+		}
+		if (stretchmode >= 2)
+			stretchmode += 1;
+		if (stretchmode === 6)
+			stretchmode = 2;
+		if (this.runtime.isNodeWebkit)
+		{
+			if (this.runtime.isDebug)
+			{
+				debuggerFullscreen(true);
+			}
+			else if (!this.runtime.isNodeFullscreen && window["nwgui"])
+			{
+				window["nwgui"]["Window"]["get"]()["enterFullscreen"]();
+				this.runtime.isNodeFullscreen = true;
+				this.runtime.fullscreen_scaling = (stretchmode >= 2 ? stretchmode : 0);
+			}
+		}
+		else
+		{
+			if (document["mozFullScreen"] || document["webkitIsFullScreen"] || !!document["msFullscreenElement"] || document["fullScreen"] || document["fullScreenElement"])
+			{
+				return;
+			}
+			this.runtime.fullscreen_scaling = (stretchmode >= 2 ? stretchmode : 0);
+			var elem = document.documentElement;
+			if (firstRequestFullscreen)
+			{
+				firstRequestFullscreen = false;
+				crruntime = this.runtime;
+				elem.addEventListener("mozfullscreenerror", onFullscreenError);
+				elem.addEventListener("webkitfullscreenerror", onFullscreenError);
+				elem.addEventListener("MSFullscreenError", onFullscreenError);
+				elem.addEventListener("fullscreenerror", onFullscreenError);
+			}
+			if (elem["requestFullscreen"])
+				elem["requestFullscreen"]();
+			else if (elem["mozRequestFullScreen"])
+				elem["mozRequestFullScreen"]();
+			else if (elem["msRequestFullscreen"])
+				elem["msRequestFullscreen"]();
+			else if (elem["webkitRequestFullScreen"])
+			{
+				if (typeof Element !== "undefined" && typeof Element["ALLOW_KEYBOARD_INPUT"] !== "undefined")
+					elem["webkitRequestFullScreen"](Element["ALLOW_KEYBOARD_INPUT"]);
+				else
+					elem["webkitRequestFullScreen"]();
+			}
+		}
+	};
+	Acts.prototype.CancelFullScreen = function ()
+	{
+		if (this.runtime.isDomFree)
+		{
+			cr.logexport("[Construct 2] Exiting fullscreen is not supported on this platform - the request has been ignored");
+			return;
+		}
+		if (this.runtime.isNodeWebkit)
+		{
+			if (this.runtime.isDebug)
+			{
+				debuggerFullscreen(false);
+			}
+			else if (this.runtime.isNodeFullscreen && window["nwgui"])
+			{
+				window["nwgui"]["Window"]["get"]()["leaveFullscreen"]();
+				this.runtime.isNodeFullscreen = false;
+			}
+		}
+		else
+		{
+			if (document["exitFullscreen"])
+				document["exitFullscreen"]();
+			else if (document["mozCancelFullScreen"])
+				document["mozCancelFullScreen"]();
+			else if (document["msExitFullscreen"])
+				document["msExitFullscreen"]();
+			else if (document["webkitCancelFullScreen"])
+				document["webkitCancelFullScreen"]();
+		}
+	};
+	Acts.prototype.Vibrate = function (pattern_)
+	{
+		try {
+			var arr = pattern_.split(",");
+			var i, len;
+			for (i = 0, len = arr.length; i < len; i++)
+			{
+				arr[i] = parseInt(arr[i], 10);
+			}
+			if (navigator["vibrate"])
+				navigator["vibrate"](arr);
+			else if (navigator["mozVibrate"])
+				navigator["mozVibrate"](arr);
+			else if (navigator["webkitVibrate"])
+				navigator["webkitVibrate"](arr);
+			else if (navigator["msVibrate"])
+				navigator["msVibrate"](arr);
+		}
+		catch (e) {}
+	};
+	Acts.prototype.InvokeDownload = function (url_, filename_)
+	{
+		var a = document.createElement("a");
+		if (typeof a["download"] === "undefined")
+		{
+			window.open(url_);
+		}
+		else
+		{
+			var body = document.getElementsByTagName("body")[0];
+			a.textContent = filename_;
+			a.href = url_;
+			a["download"] = filename_;
+			body.appendChild(a);
+			var clickEvent = new MouseEvent("click");
+			a.dispatchEvent(clickEvent);
+			body.removeChild(a);
+		}
+	};
+	Acts.prototype.InvokeDownloadString = function (str_, mimetype_, filename_)
+	{
+		var datauri = "data:" + mimetype_ + "," + encodeURIComponent(str_);
+		var a = document.createElement("a");
+		if (typeof a["download"] === "undefined")
+		{
+			window.open(datauri);
+		}
+		else
+		{
+			var body = document.getElementsByTagName("body")[0];
+			a.textContent = filename_;
+			a.href = datauri;
+			a["download"] = filename_;
+			body.appendChild(a);
+			var clickEvent = new MouseEvent("click");
+			a.dispatchEvent(clickEvent);
+			body.removeChild(a);
+		}
+	};
+	Acts.prototype.ConsoleLog = function (type_, msg_)
+	{
+		if (typeof console === "undefined")
+			return;
+		if (type_ === 0 && console.log)
+			console.log(msg_.toString());
+		if (type_ === 1 && console.warn)
+			console.warn(msg_.toString());
+		if (type_ === 2 && console.error)
+			console.error(msg_.toString());
+	};
+	Acts.prototype.ConsoleGroup = function (name_)
+	{
+		if (console && console.group)
+			console.group(name_);
+	};
+	Acts.prototype.ConsoleGroupEnd = function ()
+	{
+		if (console && console.groupEnd)
+			console.groupEnd();
+	};
+	Acts.prototype.ExecJs = function (js_)
+	{
+		try {
+			if (eval)
+				eval(js_);
+		}
+		catch (e)
+		{
+			if (console && console.error)
+				console.error("Error executing Javascript: ", e);
+		}
+	};
+	var orientations = [
+		"portrait",
+		"landscape",
+		"portrait-primary",
+		"portrait-secondary",
+		"landscape-primary",
+		"landscape-secondary"
+	];
+	Acts.prototype.LockOrientation = function (o)
+	{
+		o = Math.floor(o);
+		if (o < 0 || o >= orientations.length)
+			return;
+		this.runtime.autoLockOrientation = false;
+		var orientation = orientations[o];
+		if (screen["orientation"] && screen["orientation"]["lock"])
+			screen["orientation"]["lock"](orientation);
+		else if (screen["lockOrientation"])
+			screen["lockOrientation"](orientation);
+		else if (screen["webkitLockOrientation"])
+			screen["webkitLockOrientation"](orientation);
+		else if (screen["mozLockOrientation"])
+			screen["mozLockOrientation"](orientation);
+		else if (screen["msLockOrientation"])
+			screen["msLockOrientation"](orientation);
+	};
+	Acts.prototype.UnlockOrientation = function ()
+	{
+		this.runtime.autoLockOrientation = false;
+		if (screen["orientation"] && screen["orientation"]["unlock"])
+			screen["orientation"]["unlock"]();
+		else if (screen["unlockOrientation"])
+			screen["unlockOrientation"]();
+		else if (screen["webkitUnlockOrientation"])
+			screen["webkitUnlockOrientation"]();
+		else if (screen["mozUnlockOrientation"])
+			screen["mozUnlockOrientation"]();
+		else if (screen["msUnlockOrientation"])
+			screen["msUnlockOrientation"]();
+	};
+	pluginProto.acts = new Acts();
+	function Exps() {};
+	Exps.prototype.URL = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.toString());
+	};
+	Exps.prototype.Protocol = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.protocol);
+	};
+	Exps.prototype.Domain = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.hostname);
+	};
+	Exps.prototype.PathName = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.pathname);
+	};
+	Exps.prototype.Hash = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.hash);
+	};
+	Exps.prototype.Referrer = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : document.referrer);
+	};
+	Exps.prototype.Title = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : document.title);
+	};
+	Exps.prototype.Name = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : navigator.appName);
+	};
+	Exps.prototype.Version = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : navigator.appVersion);
+	};
+	Exps.prototype.Language = function (ret)
+	{
+		if (navigator && navigator.language)
+			ret.set_string(navigator.language);
+		else
+			ret.set_string("");
+	};
+	Exps.prototype.Platform = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : navigator.platform);
+	};
+	Exps.prototype.Product = function (ret)
+	{
+		if (navigator && navigator.product)
+			ret.set_string(navigator.product);
+		else
+			ret.set_string("");
+	};
+	Exps.prototype.Vendor = function (ret)
+	{
+		if (navigator && navigator.vendor)
+			ret.set_string(navigator.vendor);
+		else
+			ret.set_string("");
+	};
+	Exps.prototype.UserAgent = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : navigator.userAgent);
+	};
+	Exps.prototype.QueryString = function (ret)
+	{
+		ret.set_string(this.runtime.isDomFree ? "" : window.location.search);
+	};
+	Exps.prototype.QueryParam = function (ret, paramname)
+	{
+		if (this.runtime.isDomFree)
+		{
+			ret.set_string("");
+			return;
+		}
+		var match = RegExp('[?&]' + paramname + '=([^&]*)').exec(window.location.search);
+		if (match)
+			ret.set_string(decodeURIComponent(match[1].replace(/\+/g, ' ')));
+		else
+			ret.set_string("");
+	};
+	Exps.prototype.Bandwidth = function (ret)
+	{
+		var connection = navigator["connection"] || navigator["mozConnection"] || navigator["webkitConnection"];
+		if (!connection)
+			ret.set_float(Number.POSITIVE_INFINITY);
+		else
+		{
+			if (typeof connection["bandwidth"] !== "undefined")
+				ret.set_float(connection["bandwidth"]);
+			else if (typeof connection["downlinkMax"] !== "undefined")
+				ret.set_float(connection["downlinkMax"]);
+			else
+				ret.set_float(Number.POSITIVE_INFINITY);
+		}
+	};
+	Exps.prototype.ConnectionType = function (ret)
+	{
+		var connection = navigator["connection"] || navigator["mozConnection"] || navigator["webkitConnection"];
+		if (!connection)
+			ret.set_string("unknown");
+		else
+		{
+			ret.set_string(connection["type"] || "unknown");
+		}
+	};
+	Exps.prototype.BatteryLevel = function (ret)
+	{
+		var battery = navigator["battery"] || navigator["mozBattery"] || navigator["webkitBattery"];
+		if (battery)
+		{
+			ret.set_float(battery["level"]);
+		}
+		else
+		{
+			maybeLoadBatteryManager();
+			if (batteryManager)
+			{
+				ret.set_float(batteryManager["level"]);
+			}
+			else
+			{
+				ret.set_float(1);		// not supported/unknown: assume charged
+			}
+		}
+	};
+	Exps.prototype.BatteryTimeLeft = function (ret)
+	{
+		var battery = navigator["battery"] || navigator["mozBattery"] || navigator["webkitBattery"];
+		if (battery)
+		{
+			ret.set_float(battery["dischargingTime"]);
+		}
+		else
+		{
+			maybeLoadBatteryManager();
+			if (batteryManager)
+			{
+				ret.set_float(batteryManager["dischargingTime"]);
+			}
+			else
+			{
+				ret.set_float(Number.POSITIVE_INFINITY);		// not supported/unknown: assume infinite time left
+			}
+		}
+	};
+	Exps.prototype.ExecJS = function (ret, js_)
+	{
+		if (!eval)
+		{
+			ret.set_any(0);
+			return;
+		}
+		var result = 0;
+		try {
+			result = eval(js_);
+		}
+		catch (e)
+		{
+			if (console && console.error)
+				console.error("Error executing Javascript: ", e);
+		}
+		if (typeof result === "number")
+			ret.set_any(result);
+		else if (typeof result === "string")
+			ret.set_any(result);
+		else if (typeof result === "boolean")
+			ret.set_any(result ? 1 : 0);
+		else
+			ret.set_any(0);
+	};
+	Exps.prototype.ScreenWidth = function (ret)
+	{
+		ret.set_int(screen.width);
+	};
+	Exps.prototype.ScreenHeight = function (ret)
+	{
+		ret.set_int(screen.height);
+	};
+	Exps.prototype.DevicePixelRatio = function (ret)
+	{
+		ret.set_float(this.runtime.devicePixelRatio);
+	};
+	Exps.prototype.WindowInnerWidth = function (ret)
+	{
+		ret.set_int(window.innerWidth);
+	};
+	Exps.prototype.WindowInnerHeight = function (ret)
+	{
+		ret.set_int(window.innerHeight);
+	};
+	Exps.prototype.WindowOuterWidth = function (ret)
+	{
+		ret.set_int(window.outerWidth);
+	};
+	Exps.prototype.WindowOuterHeight = function (ret)
+	{
+		ret.set_int(window.outerHeight);
+	};
+	pluginProto.exps = new Exps();
+}());
 ;
 ;
 cr.plugins_.Dictionary = function(runtime)
@@ -16163,1375 +17005,6 @@ cr.plugins_.LocalStorage = function(runtime)
 	Exps.prototype.ErrorMessage = function (ret)
 	{
 		ret.set_string(errorMessage);
-	};
-	pluginProto.exps = new Exps();
-}());
-;
-;
-cr.plugins_.Multiplayer = function(runtime)
-{
-	this.runtime = runtime;
-};
-(function ()
-{
-	var pluginProto = cr.plugins_.Multiplayer.prototype;
-	pluginProto.Type = function(plugin)
-	{
-		this.plugin = plugin;
-		this.runtime = plugin.runtime;
-	};
-	var typeProto = pluginProto.Type.prototype;
-	typeProto.onCreate = function()
-	{
-	};
-	pluginProto.Instance = function(type)
-	{
-		this.type = type;
-		this.runtime = type.runtime;
-	};
-	var instanceProto = pluginProto.Instance.prototype;
-	var isSupported = false;
-	var serverlist = [];
-	instanceProto.onCreate = function()
-	{
-		this.mp = null;
-		isSupported = window["C2Multiplayer_IsSupported"]();
-		if (isSupported && typeof window["C2Multiplayer"] !== "undefined")
-			this.mp = new window["C2Multiplayer"]();
-		this.signallingUrl = "";
-		this.errorMsg = "";
-		this.peerID = "";
-		this.peerAlias = "";
-		this.leaveReason = "";
-		this.msgContent = "";
-		this.msgTag = "";
-		this.msgFromId = "";
-		this.msgFromAlias = "";
-		this.typeToRo = {};
-		this.instToPeer = {};
-		this.peerToInst = {};
-		this.gameInstanceList = null;
-		this.roomList = null;
-		this.wakerWorker = null;
-		this.inputPredictObjects = [];
-		this.trackObjects = [];				// objects to keep a history for
-		this.objectHistories = {};
-		var self = this;
-		if (isSupported)
-		{
-			this.mp["onserverlist"] = function (servers) {
-				serverlist = servers;
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnServerList, self);
-			};
-			this.mp["onsignallingerror"] = function (e) {
-				self.setError(e);
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingError, self);
-			};
-			this.mp["onsignallingclose"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingDisconnected, self);
-				self.signallingUrl = "";
-			};
-			this.mp["onsignallingwelcome"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingConnected, self);
-			};
-			this.mp["onsignallinglogin"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLoggedIn, self);
-			};
-			this.mp["onsignallingjoin"] = function (became_host) {
-				self.instToPeer = {};
-				self.peerToInst = {};
-				self.trackObjects.length = 0;
-				self.inputPredictObjects.length = 0;
-				self.objectHistories = {};
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingJoinedRoom, self);
-				if (self.runtime.isSuspended && became_host)
-				{
-					self.wakerWorker.postMessage("start");
-				}
-			};
-			this.mp["onsignallingleave"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingLeftRoom, self);
-			};
-			this.mp["onsignallingkicked"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnSignallingKicked, self);
-			};
-			this.mp["onbeforeclientupdate"] = function () {
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnClientUpdate, self);
-			};
-			this.mp["onpeeropen"] = function (peer) {
-				self.peerID = peer["id"];
-				self.peerAlias = peer["alias"];
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerConnected, self);
-			};
-			this.mp["onpeerclose"] = function (peer, reason) {
-				self.peerID = peer["id"];
-				self.peerAlias = peer["alias"];
-				self.leaveReason = reason || "unknown";
-				var inst = self.getAssociatedInstanceForPeer(peer);
-				if (inst)
-				{
-					var ro = self.typeToRo[inst.type];
-					if (ro)
-						ro["removeObjectNid"](peer["nid"]);
-					self.runtime.DestroyInstance(inst);
-				}
-				if (self.peerToInst.hasOwnProperty(peer["id"]))
-					delete self.peerToInst[peer["id"]];
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerDisconnected, self);
-			};
-			this.mp["onpeermessage"] = function (peer, o) {
-				self.msgTag = o["t"];
-				if (o["f"])
-					self.msgFromId = o["f"];
-				else
-					self.msgFromId = peer["id"];
-				self.msgFromAlias = self.mp["getAliasFromId"](self.msgFromId);
-				self.msgContent = o["m"];
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnAnyPeerMessage, self);
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnPeerMessage, self);
-			};
-			this.mp["onsignallinginstancelist"] = function (list) {
-				self.gameInstanceList = list;
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnGameInstanceList, self);
-			};
-			this.mp["onsignallingroomlist"] = function (list) {
-				self.roomList = list;
-				self.runtime.trigger(cr.plugins_.Multiplayer.prototype.cnds.OnRoomList, self);
-			};
-			this.mp["ongetobjectcount"] = function (obj) {
-				return obj.instances.length;
-			};
-			this.mp["ongetobjectvalue"] = function (obj, index, nv) {
-				if (!nv)
-					return obj.instances[index].uid;
-				var tag = nv["tag"];
-				var inst = obj.instances[index];
-				var value, peer;
-				switch (tag) {
-				case "x":
-					return inst.x;
-				case "y":
-					return inst.y;
-				case "a":
-					return inst.angle;
-				case "iv":
-					if (nv["clientvaluetag"])
-					{
-						peer = self.instToPeer[inst.uid];
-						if (peer && self.mp["me"] !== peer && !peer["wasRemoved"] && peer["hasClientState"](nv["clientvaluetag"]))
-						{
-							return peer["getInterpClientState"](nv["clientvaluetag"]);
-						}
-					}
-					value = inst.instance_vars[nv["userdata"]];
-					if (typeof value === "number")
-						return value;
-					else
-						return 0;
-				default:
-					return 0;
-				}
-			};
-			this.mp["oninstancedestroyed"] = function (ro, nid, timestamp)
-			{
-				var userdata = ro["userdata"];
-				var instmap = userdata.instmap;		// map NID to C2 instance
-				if (!userdata.deadmap)
-					userdata.deadmap = {};
-				var deadmap = userdata.deadmap;
-				deadmap[nid] = timestamp;
-				if (!instmap)
-				{
-					return;
-				}
-				if (instmap.hasOwnProperty(nid))
-				{
-					var inst = instmap[nid];
-					if (inst)
-					{
-						self.runtime.DestroyInstance(inst);
-					}
-					delete instmap[nid];
-				}
-			};
-			this.runtime.addDestroyCallback(function (inst)
-			{
-				var p;
-				var uid = inst.uid;
-				if (self.instToPeer.hasOwnProperty(uid))
-					delete self.instToPeer[uid];
-				for (p in self.peerToInst)
-				{
-					if (self.peerToInst.hasOwnProperty(p))
-					{
-						if (self.peerToInst[p] === inst)
-						{
-							delete self.peerToInst[p];
-							break;
-						}
-					}
-				}
-				if (self.objectHistories.hasOwnProperty(uid))
-					delete self.objectHistories[uid];
-				var i = self.inputPredictObjects.indexOf(inst);
-				if (i > -1)
-					self.inputPredictObjects.splice(i, 1);
-				i = self.trackObjects.indexOf(inst);
-				if (i > -1)
-					self.trackObjects.splice(i, 1);
-				self.mp["removeObjectId"](uid);
-			});
-			this.wakerWorker = new Worker("waker.js");
-			this.wakerWorker.addEventListener("message", function (e) {
-				if (e.data === "tick" && self.runtime.isSuspended)
-				{
-					self.runtime.tick(true);
-				}
-			}, false);
-			this.wakerWorker.postMessage("");
-		}
-		this.runtime.addSuspendCallback(function (s) {
-			if (!isSupported || !self.mp["isHost"]())
-				return;
-			if (s)
-			{
-				self.wakerWorker.postMessage("start");
-			}
-			else
-			{
-				self.wakerWorker.postMessage("stop");
-			}
-		});
-		this.runtime.pretickMe(this);
-	};
-	instanceProto.getAssociatedInstanceForPeer = function (peer)
-	{
-		var peer_id = peer["id"];
-		if (this.peerToInst.hasOwnProperty(peer_id))
-			return this.peerToInst[peer_id];
-		else
-			return null;
-	};
-	instanceProto.isInputPredicting = function (inst)
-	{
-		return this.inputPredictObjects.indexOf(inst) >= 0;
-	};
-	instanceProto.pretick = function ()
-	{
-		if (!isSupported)
-			return;
-		this.mp["tick"](this.runtime.dt1);
-		this.trackObjectHistories();
-		var i, len, ro;
-		if (this.mp["isInRoom"]() && !this.mp["isHost"]())
-		{
-			for (i = 0, len = this.mp["registeredObjects"].length; i < len; ++i)
-			{
-				ro = this.mp["registeredObjects"][i];
-				this.updateRegisteredObject(ro);
-			}
-		}
-	};
-	var netInstToRemove = [];
-	instanceProto.updateRegisteredObject = function (ro)
-	{
-		ro["tick"]();
-		var type = ro["obj"];
-		var count = ro["getCount"]();
-		var netvalues = ro["netvalues"];
-		var userdata = ro["userdata"];
-		if (!userdata.instmap)
-			userdata.instmap = {};
-		var instmap = userdata.instmap;		// map NID to C2 instance
-		var deadmap = userdata.deadmap;
-		var simTime = ro["simTime"];
-		var i, netinst, nid, inst, peer, nv, iv, value, j, p, created, lenj = netvalues.length;
-		var p;
-		for (p in instmap)
-		{
-			if (instmap.hasOwnProperty(p))
-			{
-				inst = instmap[p];
-				if (!this.runtime.getObjectByUID(inst.uid))
-					delete instmap[p];
-			}
-		}
-		if (deadmap)
-		{
-			for (p in deadmap)
-			{
-				if (deadmap.hasOwnProperty(p))
-				{
-					if (deadmap[p] < simTime - 3000)
-						delete deadmap[p];
-				}
-			}
-		}
-		for (i = 0; i < count; ++i)
-		{
-			netinst = ro["getNetInstAt"](i);
-			nid = netinst["nid"];
-			if (deadmap && deadmap[nid] >= simTime - 3000)
-			{
-				netInstToRemove.push(netinst);
-				if (instmap.hasOwnProperty(nid))
-				{
-					this.runtime.DestroyInstance(instmap[nid]);
-					delete instmap[nid];
-				}
-				continue;
-			}
-			if (instmap.hasOwnProperty(nid))
-			{
-				inst = instmap[nid];
-				created = false;
-			}
-			else
-			{
-				peer = this.mp["getPeerByNid"](nid);
-				if (peer)
-				{
-					this.peerID = peer["id"];
-					this.peerAlias = peer["alias"];
-				}
-				else
-				{
-					if (ro["hasOverriddenNids"])
-					{
-						continue;
-					}
-					this.peerID = "";
-					this.peerAlias = "";
-				}
-				inst = this.runtime.createInstance(type, this.runtime.running_layout.layers[type.default_layerindex], -1000, -1000);
-				instmap[nid] = inst;
-				created = true;
-			}
-			if (netinst["isTimedOut"](simTime))
-			{
-				netInstToRemove.push(netinst);
-				if (instmap.hasOwnProperty(nid))
-					delete instmap[nid];
-				this.runtime.DestroyInstance(inst);
-				continue;
-			}
-			if (this.isInputPredicting(inst))
-			{
-				this.correctInputPrediction(inst, netinst, netvalues, simTime);
-			}
-			else
-			{
-				for (j = 0; j < lenj; ++j)
-				{
-					value = netinst["getInterp"](simTime, j);
-					nv = netvalues[j];
-					switch (nv["tag"]) {
-					case "x":
-						inst.x = value;
-						inst.set_bbox_changed();
-						break;
-					case "y":
-						inst.y = value;
-						inst.set_bbox_changed();
-						break;
-					case "a":
-						inst.angle = value;
-						inst.set_bbox_changed();
-						break;
-					case "iv":
-						iv = nv["userdata"];
-						if (iv > inst.instance_vars.length || typeof inst.instance_vars[iv] !== "number")
-							break;
-						inst.instance_vars[iv] = value;
-						break;
-					}
-				}
-			}
-			if (created)
-			{
-				this.runtime.trigger(Object.getPrototypeOf(type.plugin).cnds.OnCreated, inst);
-			}
-		}
-		for (i = 0, count = netInstToRemove.length; i < count; ++i)
-		{
-			ro["removeNetInstance"](netInstToRemove[i]);
-		}
-		netInstToRemove.length = 0;
-	};
-	instanceProto.trackObjectHistories = function ()
-	{
-		var hosttime = this.mp["getHostInputArrivalTime"]();
-		var i, len;
-		for (i = 0, len = this.trackObjects.length; i < len; ++i)
-		{
-			this.trackObjectHistory(this.trackObjects[i], hosttime);
-		}
-	};
-	function ObjectHistory(inst_)
-	{
-		this.inst = inst_;
-		this.history = [];
-	};
-	ObjectHistory.prototype.getLastDelta = function (tag, i)
-	{
-		if (this.history.length < 2)
-			return 0;		// not yet enough data
-		var from = this.history[this.history.length - 2];
-		var to = this.history[this.history.length - 1];
-		switch (tag) {
-		case "x":
-			return to.x - from.x;
-		case "y":
-			return to.y - from.y;
-		case "a":
-			return to.angle - from.angle;
-		case "iv":
-			return to.ivs[i] - from.ivs[i];
-		}
-		return 0;
-	};
-	ObjectHistory.prototype.getInterp = function (tag, index, time, interp)
-	{
-		var i, len, h;
-		var prev = null;
-		var next = null;
-		for (i = 0, len = this.history.length; i < len; ++i)
-		{
-			h = this.history[i];
-			if (h.timestamp < time)
-				prev = h;
-			else
-			{
-				if (i + 1 < this.history.length)
-					next = this.history[i + 1];
-				break;
-			}
-		}
-		if (!prev)
-			return (void 0);
-		var prev_value = 0;
-		switch (tag) {
-		case "x":
-			prev_value = prev.x;
-			break;
-		case "y":
-			prev_value = prev.y;
-			break;
-		case "a":
-			prev_value = prev.angle;
-			break;
-		case "iv":
-			prev_value = prev.ivs[index];
-			break;
-		}
-		if (!next)
-			return prev_value;
-		var next_value = prev_value;
-		switch (tag) {
-		case "x":
-			next_value = next.x;
-			break;
-		case "y":
-			next_value = next.y;
-			break;
-		case "a":
-			next_value = next.angle;
-			break;
-		case "iv":
-			next_value = next.ivs[index];
-			break;
-		}
-		var x = cr.unlerp(prev.timestamp, next.timestamp, time);
-		return window["interpNetValue"](interp, prev_value, next_value, x, false);
-	};
-	ObjectHistory.prototype.applyCorrection = function (tag, index, correction)
-	{
-		var i, len, h;
-		for (i = 0, len = this.history.length; i < len; ++i)
-		{
-			h = this.history[i];
-			switch (tag) {
-			case "x":
-				h.x += correction;
-				break;
-			case "y":
-				h.y += correction;
-				break;
-			case "a":
-				h.angle += correction;
-				break;
-			case "iv":
-				h.ivs[index] += correction;
-				break;
-			}
-		};
-	};
-	function ObjectHistoryEntry(oh_)
-	{
-		this.oh = oh_;
-		this.timestamp = 0;
-		this.x = 0;
-		this.y = 0;
-		this.angle = 0;
-		this.ivs = [];
-	};
-	var history_cache = [];
-	function allocHistoryEntry(oh_)
-	{
-		var ret;
-		if (history_cache.length)
-		{
-			ret = history_cache.pop();
-			ret.oh = oh_;
-			return ret;
-		}
-		else
-			return new ObjectHistoryEntry(oh_);
-	};
-	function freeHistoryEntry(he)
-	{
-		he.ivs.length = 0;
-		if (history_cache.length < 1000)
-			history_cache.push(he);
-	};
-	instanceProto.trackObjectHistory = function (inst, hosttime)
-	{
-		if (!this.objectHistories.hasOwnProperty(inst.uid))
-			this.objectHistories[inst.uid] = new ObjectHistory(inst);
-		var oh = this.objectHistories[inst.uid];
-		var he = allocHistoryEntry(oh);
-		he.timestamp = hosttime;
-		he.x = inst.x;
-		he.y = inst.y;
-		he.angle = inst.angle;
-		cr.shallowAssignArray(he.ivs, inst.instance_vars);
-		oh.history.push(he);
-		while (oh.history.length > 0 && oh.history[0].timestamp <= (hosttime - 2000))
-			freeHistoryEntry(oh.history.shift());
-	};
-	var clientXerror = 0;
-	var clientYerror = 0;
-	var hostX = 0;
-	var hostY = 0;
-	function linearCorrect(current, target, delta, position, isPlatformBehavior)
-	{
-		var diff = target - current;
-		if (diff === 0)
-			return 0;
-		var abs_diff = cr.abs(diff);
-		if (abs_diff <= cr.abs(delta / 10) || (position && (abs_diff < 1 || abs_diff >= 1000)))
-			return diff;
-		var minimum_correction = abs_diff / 50;
-		if (isPlatformBehavior)
-			minimum_correction = cr.max(minimum_correction, 1);
-		var delta_correction = cr.abs(delta / 5);
-		if (position && abs_diff >= 10)
-		{
-			minimum_correction = abs_diff / 10;
-			delta_correction = cr.abs(delta / 2);
-		}
-		var abs_correction = cr.max(minimum_correction, delta_correction);
-		if (abs_correction > abs_diff)
-			abs_correction = abs_diff;
-		if (diff > 0)
-			return abs_correction;
-		else
-			return -abs_correction;
-	};
-	instanceProto.correctInputPrediction = function (inst, netinst, netvalues, simTime)
-	{
-		if (!this.objectHistories.hasOwnProperty(inst.uid))
-			return;		// no data yet, leave as is
-		var oh = this.objectHistories[inst.uid];
-		var j, latestupdate, host_value, my_value, nv, diff, iv, tag, interp, userdata, correction;
-		var lenj = netvalues.length;
-		var position_delta = cr.distanceTo(0, 0, oh.getLastDelta("x"), oh.getLastDelta("y"));
-		var isPlatformBehavior = !!inst.extra["isPlatformBehavior"];
-		for (j = 0; j < lenj; ++j)
-		{
-			nv = netvalues[j];
-			tag = nv["tag"];
-			userdata = nv["userdata"];
-			interp = nv["interp"];
-			latestupdate = netinst["getLatestUpdate"]();
-			if (!latestupdate)
-				continue;		// no data from server
-			host_value = latestupdate.data[j];
-			my_value = oh.getInterp(tag, userdata, latestupdate.timestamp, interp);
-			if (typeof my_value === "undefined")
-				continue;		// no local history yet
-			correction = 0;
-			switch (tag) {
-			case "x":
-				correction = linearCorrect(my_value, host_value, position_delta, true, isPlatformBehavior);
-				if (correction !== 0)
-				{
-					inst.x += correction;
-					inst.set_bbox_changed();
-				}
-				clientXerror = host_value - my_value + correction;
-				hostX = host_value;
-				break;
-			case "y":
-				correction = linearCorrect(my_value, host_value, position_delta, true, isPlatformBehavior);
-				if (correction !== 0)
-				{
-					inst.y += correction;
-					inst.set_bbox_changed();
-				}
-				clientYerror = host_value - my_value + correction;
-				hostY = host_value;
-				break;
-			case "a":
-				correction = cr.anglelerp(my_value, host_value, 0.5) - my_value;
-				if (correction !== 0)
-				{
-					inst.angle += correction;
-					inst.set_bbox_changed();
-				}
-				break;
-			case "iv":
-				iv = userdata;
-				if (iv > inst.instance_vars.length || typeof inst.instance_vars[iv] !== "number")
-					break;
-				if (!nv["clientvaluetag"])
-					inst.instance_vars[iv] = netinst["getInterp"](simTime, j);
-				break;
-			}
-			if (correction !== 0)
-				oh.applyCorrection(tag, userdata, correction);
-		}
-	};
-	instanceProto.setError = function (e)
-	{
-		if (!e)
-			this.errorMsg = "unknown error";
-		else if (typeof e === "string")
-			this.errorMsg = e;
-		else if (typeof e.message === "string")
-			this.errorMsg = e.message;
-		else if (typeof e.details === "string")
-			this.errorMsg = e.details;
-		else if (typeof e.data === "string")
-			this.errorMsg = e.data;
-		else if (typeof e.type === "string")
-			this.errorMsg = e.type;
-		else
-			this.errorMsg = "error";
-	};
-	instanceProto.onDestroy = function ()
-	{
-	};
-	instanceProto.saveToJSON = function ()
-	{
-		return {
-		};
-	};
-	instanceProto.loadFromJSON = function (o)
-	{
-	};
-	function Cnds() {};
-	Cnds.prototype.OnServerList = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingError = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingConnected = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingDisconnected = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingLoggedIn = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingJoinedRoom = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingLeftRoom = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnSignallingKicked = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnPeerConnected = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnPeerDisconnected = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.SignallingIsConnected = function ()
-	{
-		return isSupported && this.mp["isConnected"]();
-	};
-	Cnds.prototype.SignallingIsLoggedIn = function ()
-	{
-		return isSupported && this.mp["isLoggedIn"]();
-	};
-	Cnds.prototype.SignallingIsInRoom = function ()
-	{
-		return isSupported && this.mp["isInRoom"]();
-	};
-	Cnds.prototype.IsHost = function ()
-	{
-		return isSupported && this.mp["isHost"]();
-	};
-	Cnds.prototype.IsSupported = function ()
-	{
-		return isSupported;
-	};
-	Cnds.prototype.OnPeerMessage = function (tag_)
-	{
-		return this.msgTag === tag_;
-	};
-	Cnds.prototype.OnAnyPeerMessage = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnClientUpdate = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnGameInstanceList = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.OnRoomList = function ()
-	{
-		return true;
-	};
-	Cnds.prototype.IsReadyForInput = function ()
-	{
-		if (!isSupported)
-			return false;
-		return this.mp["isReadyForInput"]();
-	};
-	Cnds.prototype.ComparePeerCount = function (cmp_, x_)
-	{
-		var peercount = 0;
-		if (isSupported)
-			peercount = this.mp["getPeerCount"]();
-		return cr.do_cmp(peercount, cmp_, x_);
-	};
-	pluginProto.cnds = new Cnds();
-	function Acts() {};
-	Acts.prototype.RequestServerList = function (url_)
-	{
-		if (!isSupported)
-			return;
-		this.mp["requestServerList"](url_);
-	};
-	Acts.prototype.SignallingConnect = function (url_)
-	{
-		if (!isSupported || this.mp["isConnected"]())
-			return;
-		this.signallingUrl = url_;
-		this.mp["signallingConnect"](url_);
-	};
-	Acts.prototype.SignallingDisconnect = function ()
-	{
-		if (!isSupported || !this.mp["isConnected"]())
-			return;
-		this.mp["signallingDisconnect"]();
-	};
-	Acts.prototype.AddICEServer = function (url_, username_, credential_)
-	{
-		if (!isSupported)
-			return;
-		var o = {
-			"urls": url_
-		};
-		if (username_)
-			o["username"] = username_;
-		if (credential_)
-			o["credential"] = credential_;
-		this.mp["mergeIceServerList"]([o]);
-	};
-	Acts.prototype.SignallingLogin = function (alias_)
-	{
-		if (!isSupported || !this.mp["isConnected"] || this.mp["isLoggedIn"]())
-			return;
-		this.mp["signallingLogin"](alias_);
-	};
-	Acts.prototype.SignallingJoinRoom = function (game_, instance_, room_, max_clients_)
-	{
-		if (!isSupported || !this.mp["isLoggedIn"]() || this.mp["isInRoom"]())
-			return;
-		this.mp["signallingJoinGameRoom"](game_, instance_, room_, max_clients_);
-	};
-	Acts.prototype.SignallingAutoJoinRoom = function (game_, instance_, room_, max_clients_, locking_)
-	{
-		if (!isSupported || !this.mp["isLoggedIn"]() || this.mp["isInRoom"]())
-			return;
-		this.mp["signallingAutoJoinGameRoom"](game_, instance_, room_, max_clients_, (locking_ === 0));
-	};
-	Acts.prototype.SignallingLeaveRoom = function ()
-	{
-		if (!isSupported || !this.mp["isInRoom"]())
-			return;
-		this.mp["signallingLeaveRoom"]();
-	};
-	Acts.prototype.DisconnectRoom = function ()
-	{
-		if (!isSupported)
-			return;
-		this.mp["disconnectRoom"](true);
-	};
-	function modeToDCType(mode_)
-	{
-		switch (mode_) {
-		case 0:		// reliable ordered
-			return "o";
-		case 1:		// reliable unordered
-			return "r";
-		case 2:		// unreliable
-			return "u";
-		default:
-			return "o";
-		}
-	};
-	Acts.prototype.SendPeerMessage = function (peerid_, tag_, message_, mode_)
-	{
-		if (!isSupported)
-			return;
-		if (!peerid_)
-			peerid_ = this.mp["getHostID"]();
-		var peer = this.mp["getPeerById"](peerid_);
-		if (!peer)
-			return;
-		peer["send"](modeToDCType(mode_), JSON.stringify({
-			"c": "m",			// command: message
-			"t": tag_,			// tag
-			"m": message_		// content
-		}));
-	};
-	Acts.prototype.HostBroadcastMessage = function (from_id_, tag_, message_, mode_)
-	{
-		if (!isSupported)
-			return;
-		var skip = this.mp["getPeerById"](from_id_);
-		var o = {
-			"c": "m",			// command: message
-			"t": tag_,			// tag
-			"f": (from_id_ || this.mp["getHostID"]()),
-			"m": message_		// content
-		};
-		this.mp["hostBroadcast"](modeToDCType(mode_), JSON.stringify(o), skip);
-	};
-	Acts.prototype.SimulateLatency = function (latency_, pdv_, loss_)
-	{
-		if (!isSupported)
-			return;
-		this.mp["setLatencySimulation"](latency_ * 1000, pdv_ * 1000, loss_);
-	};
-	instanceProto.doSyncObject = function (type_, data_, precision_, bandwidth_)
-	{
-		if (!isSupported)
-			return;
-		var ro = this.mp["registerObject"](type_, type_.sid, bandwidth_);
-		if (data_ === 1)		// position only
-		{
-			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "x");		// for x
-			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "y");		// for y
-		}
-		else if (data_ === 2)	// angle only
-		{
-			ro["addValue"](this.mp["INTERP_ANGULAR"], precision_, "a");		// for angle
-		}
-		else if (data_ === 3)	// position and angle
-		{
-			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "x");		// for x
-			ro["addValue"](this.mp["INTERP_LINEAR"], precision_, "y");		// for y
-			ro["addValue"](this.mp["INTERP_ANGULAR"], precision_, "a");		// for angle
-		}
-		this.typeToRo[type_] = ro;
-	};
-	Acts.prototype.SyncObject = function (type_, data_, precision_, bandwidth_)
-	{
-		if (!isSupported)
-			return;
-		var i, len;
-		if (type_.is_family)
-		{
-			for (i = 0, len = type_.members.length; i < len; ++i)
-			{
-				this.doSyncObject(type_.members[i], data_, precision_, bandwidth_);
-			}
-		}
-		else
-		{
-			this.doSyncObject(type_, data_, precision_, bandwidth_);
-		}
-	};
-	var prompted_bad_sync = false;
-	instanceProto.doSyncObjectInstanceVar = function (type_, var_, precision_, interp_, clientvaluetag_)
-	{
-		if (!isSupported)
-			return;
-		var ro = this.typeToRo[type_];
-		if (!ro)
-		{
-			return;
-		}
-		var ip = this.mp["INTERP_NONE"];
-		if (interp_ === 1)		// linear interpolation
-			ip = this.mp["INTERP_LINEAR"];
-		else if (interp_ === 2)	// angular interpolation
-			ip = this.mp["INTERP_ANGULAR"];
-		ro["addValue"](ip, precision_, "iv", var_, clientvaluetag_);
-	};
-	Acts.prototype.SyncObjectInstanceVar = function (type_, var_, precision_, interp_, clientvaluetag_)
-	{
-		if (!isSupported)
-			return;
-		var i, len, t;
-		if (type_.is_family)
-		{
-			for (i = 0, len = type_.members.length; i < len; ++i)
-			{
-				t = type_.members[i];
-				this.doSyncObjectInstanceVar(t, var_ + t.family_var_map[type_.family_index], precision_, interp_, clientvaluetag_);
-			}
-		}
-		else
-		{
-			this.doSyncObjectInstanceVar(type_, var_, precision_, interp_, clientvaluetag_);
-		}
-	};
-	Acts.prototype.AssociateObjectWithPeer = function (type_, peerid_)
-	{
-		if (!isSupported)
-			return;
-		var inst = type_.getFirstPicked();
-		if (!inst)
-			return;
-		var ro = this.typeToRo[type_];
-		if (!ro)
-			return;
-		var peer = this.mp["getPeerById"](peerid_);
-		if (!peer)
-			return;
-		if (this.mp["isHost"]())
-		{
-			ro["overrideNid"](inst.uid, peer["nid"]);
-			if (this.trackObjects.indexOf(inst) === -1)		// only add if not already tracked
-				this.trackObjects.push(inst);
-		}
-		this.instToPeer[inst.uid] = peer;
-		this.peerToInst[peer["id"]] = inst;
-	};
-	Acts.prototype.SetClientState = function (tag, x)
-	{
-		if (!isSupported)
-			return;
-		this.mp["setClientState"](tag, x);
-	};
-	Acts.prototype.AddClientInputValue = function (tag, precision, interpolation)
-	{
-		if (!isSupported)
-			return;
-		this.mp["addClientInputValue"](tag, precision, interpolation);
-	};
-	Acts.prototype.InputPredictObject = function (obj)
-	{
-		if (!isSupported || !obj)
-			return;
-		if (this.mp["isHost"]())
-			return;		// host mustn't input predict anything
-		var inst = obj.getFirstPicked();
-		if (!inst)
-			return;
-		if (this.inputPredictObjects.indexOf(inst) >= 0)
-			return;		// already input predicted
-		inst.extra["inputPredicted"] = true;
-		this.trackObjects.push(inst);
-		this.inputPredictObjects.push(inst);
-	};
-	Acts.prototype.SignallingRequestGameInstanceList = function (game_)
-	{
-		if (!isSupported)
-			return;
-		this.mp["signallingRequestGameInstanceList"](game_);
-	};
-	Acts.prototype.SignallingRequestRoomList = function (game_, instance_, which_)
-	{
-		if (!isSupported)
-			return;
-		var whichstr = "all";
-		if (which_ === 1)
-			whichstr = "unlocked";
-		else if (which_ === 2)
-			whichstr = "available";
-		this.mp["signallingRequestRoomList"](game_, instance_, whichstr);
-	};
-	Acts.prototype.SetBandwidthProfile = function (profile)
-	{
-		if (!isSupported)
-			return;
-		var updateRate, delay;
-		if (profile === 0)		// Internet
-		{
-			updateRate = 30;	// 30 Hz updates
-			delay = 80;			// 80 ms buffer
-		}
-		else
-		{
-			updateRate = 60;	// 60 Hz updates
-			delay = 40;			// 40ms buffer
-		}
-		this.mp["setBandwidthSettings"](updateRate, delay);
-	};
-	Acts.prototype.KickPeer = function (peerid_, reason_)
-	{
-		if (!isSupported)
-			return;
-		if (!this.mp["isHost"]())
-			return;
-		if (peerid_ === this.mp["getMyID"]())
-			return;		// can't kick self
-		var peer = this.mp["getPeerById"](peerid_);
-		if (!peer)
-			return;
-		peer["remove"](reason_);
-	};
-	pluginProto.acts = new Acts();
-	function Exps() {};
-	Exps.prototype.ServerListCount = function (ret)
-	{
-		ret.set_int(serverlist.length);
-	};
-	Exps.prototype.ServerListURLAt = function (ret, i)
-	{
-		i = Math.floor(i);
-		if (i < 0 || i >= serverlist.length)
-			ret.set_string("");
-		else
-			ret.set_string(serverlist[i]["url"]);
-	};
-	Exps.prototype.ServerListNameAt = function (ret, i)
-	{
-		i = Math.floor(i);
-		if (i < 0 || i >= serverlist.length)
-			ret.set_string("");
-		else
-			ret.set_string(serverlist[i]["name"]);
-	};
-	Exps.prototype.ServerListOperatorAt = function (ret, i)
-	{
-		i = Math.floor(i);
-		if (i < 0 || i >= serverlist.length)
-			ret.set_string("");
-		else
-			ret.set_string(serverlist[i]["operator"]);
-	};
-	Exps.prototype.ServerListWebsiteAt = function (ret, i)
-	{
-		i = Math.floor(i);
-		if (i < 0 || i >= serverlist.length)
-			ret.set_string("");
-		else
-			ret.set_string(serverlist[i]["operator_website"]);
-	};
-	Exps.prototype.SignallingURL = function (ret)
-	{
-		ret.set_string(this.signallingUrl);
-	};
-	Exps.prototype.SignallingVersion = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["sigserv_version"] : "");
-	};
-	Exps.prototype.SignallingName = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["sigserv_name"] : "");
-	};
-	Exps.prototype.SignallingOperator = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["sigserv_operator"] : "");
-	};
-	Exps.prototype.SignallingMOTD = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["sigserv_motd"] : "");
-	};
-	Exps.prototype.MyAlias = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getMyAlias"]() : "");
-	};
-	Exps.prototype.CurrentGame = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getCurrentGame"]() : "");
-	};
-	Exps.prototype.CurrentInstance = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getCurrentGameInstance"]() : "");
-	};
-	Exps.prototype.CurrentRoom = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getCurrentRoom"]() : "");
-	};
-	Exps.prototype.ErrorMessage = function (ret)
-	{
-		ret.set_string(this.errorMsg);
-	};
-	Exps.prototype.MyID = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getMyID"]() : "");
-	};
-	Exps.prototype.PeerID = function (ret)
-	{
-		ret.set_string(this.peerID);
-	};
-	Exps.prototype.PeerAlias = function (ret)
-	{
-		ret.set_string(this.peerAlias);
-	};
-	Exps.prototype.HostID = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getHostID"]() : "");
-	};
-	Exps.prototype.HostAlias = function (ret)
-	{
-		ret.set_string(isSupported ? this.mp["getHostAlias"]() : "");
-	};
-	Exps.prototype.Message = function (ret)
-	{
-		ret.set_string(this.msgContent);
-	};
-	Exps.prototype.Tag = function (ret)
-	{
-		ret.set_string(this.msgTag);
-	};
-	Exps.prototype.FromID = function (ret)
-	{
-		ret.set_string(this.msgFromId);
-	};
-	Exps.prototype.FromAlias = function (ret)
-	{
-		ret.set_string(this.msgFromAlias);
-	};
-	Exps.prototype.PeerAliasFromID = function (ret, id_)
-	{
-		ret.set_string(isSupported ? this.mp["getAliasFromId"](id_) : "");
-	};
-	Exps.prototype.PeerLatency = function (ret, id_)
-	{
-		if (!isSupported)
-		{
-			ret.set_float(0);
-			return;
-		}
-		var peer = this.mp["getPeerById"](id_);
-		ret.set_float(peer ? peer["latency"] : 0);
-	};
-	Exps.prototype.PeerPDV = function (ret, id_)
-	{
-		if (!isSupported)
-		{
-			ret.set_float(0);
-			return;
-		}
-		var peer = this.mp["getPeerById"](id_);
-		ret.set_float(peer ? peer["pdv"] : 0);
-	};
-	Exps.prototype.StatOutboundCount = function (ret)
-	{
-		ret.set_int(isSupported ? this.mp["stats"]["outboundPerSec"] : 0);
-	};
-	Exps.prototype.StatOutboundBandwidth = function (ret)
-	{
-		ret.set_int(isSupported ? this.mp["stats"]["outboundBandwidthPerSec"] : 0);
-	};
-	Exps.prototype.StatInboundCount = function (ret)
-	{
-		ret.set_int(isSupported ? this.mp["stats"]["inboundPerSec"] : 0);
-	};
-	Exps.prototype.StatInboundBandwidth = function (ret)
-	{
-		ret.set_int(isSupported ? this.mp["stats"]["inboundBandwidthPerSec"] : 0);
-	};
-	Exps.prototype.PeerState = function (ret, id_, tag_)
-	{
-		if (!isSupported)
-		{
-			ret.set_float(0);
-			return;
-		}
-		var peer = this.mp["getPeerById"](id_);
-		ret.set_float(peer ? peer["getInterpClientState"](tag_) : 0);
-	};
-	Exps.prototype.ClientXError = function (ret)
-	{
-		ret.set_float(clientXerror);
-	};
-	Exps.prototype.ClientYError = function (ret)
-	{
-		ret.set_float(clientYerror);
-	};
-	Exps.prototype.HostX = function (ret)
-	{
-		ret.set_float(hostX);
-	};
-	Exps.prototype.HostY = function (ret)
-	{
-		ret.set_float(hostY);
-	};
-	Exps.prototype.PeerCount = function (ret)
-	{
-		ret.set_int(isSupported ? this.mp["getPeerCount"]() : 0);
-	};
-	Exps.prototype.ListInstanceCount = function (ret)
-	{
-		if (this.gameInstanceList)
-		{
-			ret.set_int(this.gameInstanceList.length);
-		}
-		else
-			ret.set_int(0);
-	};
-	Exps.prototype.ListInstanceName = function (ret, index)
-	{
-		index = Math.floor(index);
-		if (this.gameInstanceList)
-		{
-			if (index < 0 || index >= this.gameInstanceList.length)
-			{
-				ret.set_string("");
-			}
-			else
-				ret.set_string(this.gameInstanceList[index]["name"] || "");
-		}
-		else
-			ret.set_string("");
-	};
-	Exps.prototype.ListInstancePeerCount = function (ret, index)
-	{
-		index = Math.floor(index);
-		if (this.gameInstanceList)
-		{
-			if (index < 0 || index >= this.gameInstanceList.length)
-			{
-				ret.set_int(0);
-			}
-			else
-				ret.set_int(this.gameInstanceList[index]["peercount"] || 0);
-		}
-		else
-			ret.set_int(0);
-	};
-	Exps.prototype.ListRoomCount = function (ret)
-	{
-		ret.set_int(this.roomList ? this.roomList.length : 0);
-	};
-	function getListRoomAt(roomList, i)
-	{
-		if (!roomList)
-			return null;
-		i = Math.floor(i);
-		if (i < 0 || i >= roomList.length)
-			return null;
-		return roomList[i];
-	};
-	Exps.prototype.ListRoomName = function (ret, index)
-	{
-		var r = getListRoomAt(this.roomList, index);
-		ret.set_string(r ? r["name"] : "");
-	};
-	Exps.prototype.ListRoomPeerCount = function (ret, index)
-	{
-		var r = getListRoomAt(this.roomList, index);
-		ret.set_int(r ? r["peercount"] : 0);
-	};
-	Exps.prototype.ListRoomMaxPeerCount = function (ret, index)
-	{
-		var r = getListRoomAt(this.roomList, index);
-		ret.set_int(r ? r["maxpeercount"] : 0);
-	};
-	Exps.prototype.ListRoomState = function (ret, index)
-	{
-		var r = getListRoomAt(this.roomList, index);
-		ret.set_string(r ? r["state"] : "");
-	};
-	Exps.prototype.LeaveReason = function (ret)
-	{
-		ret.set_string(this.leaveReason);
-	};
-	instanceProto.lagCompensate = function (movingPeerID, fromPeerID, tag, interp)
-	{
-		if (!isSupported)
-			return 0;
-		if (!this.mp["isHost"]())
-			return 0;
-		var movePeer = this.mp["getPeerById"](movingPeerID);
-		if (!movePeer)
-			return 0;
-		var moveInst = this.getAssociatedInstanceForPeer(movePeer);
-		if (!moveInst)
-			return 0;
-		var ret = 0;
-		switch (tag) {
-		case "x":	ret = moveInst.x;		break;
-		case "y":	ret = moveInst.y;		break;
-		case "a":	ret = moveInst.angle;	break;
-		}
-		var fromPeer = this.mp["getPeerById"](fromPeerID);
-		if (!fromPeer || fromPeer === movePeer)		// cannot find that peer or is same peer
-			return ret;
-		if (this.mp["me"] === fromPeer)
-			return ret;
-		var delay = (fromPeer["latency"] + this.mp["clientDelay"]) * 2;
-		var moveUid = moveInst.uid;
-		if (!this.objectHistories.hasOwnProperty(moveUid))
-			return ret;		// no object history data yet
-		var oh = this.objectHistories[moveUid];
-		var interp = oh.getInterp(tag, 0, cr.performance_now() - delay, interp);
-		if (typeof interp === "undefined")
-			return ret;
-		else
-			return interp;
-	};
-	Exps.prototype.LagCompensateX = function (ret, movingPeerID, fromPeerID)
-	{
-		ret.set_float(this.lagCompensate(movingPeerID, fromPeerID, "x", this.mp["INTERP_LINEAR"]));
-	};
-	Exps.prototype.LagCompensateY = function (ret, movingPeerID, fromPeerID)
-	{
-		ret.set_float(this.lagCompensate(movingPeerID, fromPeerID, "y", this.mp["INTERP_LINEAR"]));
-	};
-	Exps.prototype.LagCompensateAngle = function (ret, movingPeerID, fromPeerID)
-	{
-		ret.set_float(cr.to_degrees(this.lagCompensate(movingPeerID, fromPeerID, "a", this.mp["INTERP_ANGULAR"])));
-	};
-	Exps.prototype.PeerIDAt = function (ret, i)
-	{
-		if (!isSupported)
-		{
-			ret.set_string("");
-			return;
-		}
-		i = Math.floor(i);
-		var peer = this.mp["getPeerAt"](i);
-		ret.set_string(peer ? peer["id"] : "");
-	};
-	Exps.prototype.PeerAliasAt = function (ret, i)
-	{
-		if (!isSupported)
-		{
-			ret.set_string("");
-			return;
-		}
-		i = Math.floor(i);
-		var peer = this.mp["getPeerAt"](i);
-		ret.set_string(peer ? peer["alias"] : "");
 	};
 	pluginProto.exps = new Exps();
 }());
@@ -22196,31 +21669,42 @@ cr.behaviors.Rex_pin2imgpt = function(runtime)
 	};
 }());
 cr.getObjectRefTable = function () { return [
-	cr.plugins_.Function,
+	cr.plugins_.Browser,
 	cr.plugins_.Dictionary,
-	cr.plugins_.LocalStorage,
+	cr.plugins_.Function,
 	cr.plugins_.Keyboard,
-	cr.plugins_.Multiplayer,
 	cr.plugins_.Photon,
+	cr.plugins_.LocalStorage,
 	cr.plugins_.Sprite,
-	cr.plugins_.Text,
-	cr.plugins_.TextBox,
 	cr.plugins_.TiledBg,
 	cr.plugins_.Touch,
+	cr.plugins_.Text,
+	cr.plugins_.TextBox,
 	cr.behaviors.Flash,
 	cr.behaviors.Rex_pin2imgpt,
 	cr.behaviors.Bullet,
+	cr.system_object.prototype.cnds.OnLayoutStart,
 	cr.plugins_.TextBox.prototype.acts.SetText,
-	cr.plugins_.Dictionary.prototype.exps.Get,
+	cr.system_object.prototype.exps["int"],
+	cr.system_object.prototype.exps.random,
+	cr.plugins_.TextBox.prototype.acts.SetCSSStyle,
 	cr.system_object.prototype.cnds.Compare,
 	cr.plugins_.TextBox.prototype.exps.Text,
 	cr.plugins_.Touch.prototype.cnds.OnTouchObject,
+	cr.system_object.prototype.cnds.CompareVar,
 	cr.system_object.prototype.acts.SetVar,
 	cr.behaviors.Flash.prototype.acts.Flash,
 	cr.system_object.prototype.acts.Wait,
 	cr.system_object.prototype.acts.GoToLayout,
+	cr.system_object.prototype.cnds.PickAll,
+	cr.plugins_.Sprite.prototype.acts.SetOpacity,
+	cr.plugins_.Sprite.prototype.cnds.PickByUID,
+	cr.plugins_.Sprite.prototype.exps.UID,
+	cr.plugins_.Sprite.prototype.exps.AnimationName,
+	cr.plugins_.Sprite.prototype.acts.SetX,
+	cr.plugins_.Sprite.prototype.exps.X,
+	cr.plugins_.Browser.prototype.acts.GoToURLWindow,
 	cr.system_object.prototype.cnds.IsGroupActive,
-	cr.system_object.prototype.cnds.OnLayoutStart,
 	cr.plugins_.Photon.prototype.acts.connect,
 	cr.plugins_.Photon.prototype.acts.setMyRoomMaxPlayers,
 	cr.plugins_.Photon.prototype.cnds.isConnectedToNameServer,
@@ -22230,38 +21714,43 @@ cr.getObjectRefTable = function () { return [
 	cr.plugins_.Photon.prototype.cnds.onJoinRandomRoomNoMatchFound,
 	cr.plugins_.Photon.prototype.acts.createRoom,
 	cr.system_object.prototype.exps.round,
-	cr.system_object.prototype.exps.random,
 	cr.plugins_.Photon.prototype.cnds.onJoinRoom,
 	cr.plugins_.Text.prototype.acts.SetText,
 	cr.plugins_.Photon.prototype.exps.MyActorNr,
 	cr.plugins_.Photon.prototype.exps.MasterActorNr,
 	cr.behaviors.Rex_pin2imgpt.prototype.acts.Pin,
+	cr.plugins_.Sprite.prototype.acts.SetAnim,
 	cr.system_object.prototype.cnds.Else,
 	cr.plugins_.Photon.prototype.cnds.onEvent,
 	cr.plugins_.Photon.prototype.exps.EventData,
-	cr.plugins_.Touch.prototype.cnds.IsTouchingObject,
-	cr.plugins_.Keyboard.prototype.cnds.IsKeyDown,
-	cr.system_object.prototype.cnds.CompareVar,
+	cr.system_object.prototype.cnds.Every,
+	cr.plugins_.Sprite.prototype.cnds.IsBoolInstanceVarSet,
 	cr.system_object.prototype.acts.AddVar,
 	cr.plugins_.Photon.prototype.acts.raiseEvent,
+	cr.plugins_.Touch.prototype.cnds.IsTouchingObject,
+	cr.plugins_.Keyboard.prototype.cnds.IsKeyDown,
+	cr.plugins_.Sprite.prototype.cnds.IsOutsideLayout,
 	cr.plugins_.Photon.prototype.exps.ActorCount,
+	cr.system_object.prototype.cnds.TriggerOnce,
 	cr.behaviors.Bullet.prototype.acts.SetEnabled,
+	cr.plugins_.Sprite.prototype.acts.SetBoolInstanceVar,
 	cr.plugins_.Keyboard.prototype.cnds.OnKey,
 	cr.system_object.prototype.acts.SubVar,
+	cr.plugins_.Photon.prototype.cnds.onActorLeave,
+	cr.plugins_.Photon.prototype.acts.setMyRoomIsOpen,
+	cr.system_object.prototype.exps.choose,
 	cr.system_object.prototype.cnds.EveryTick,
 	cr.behaviors.Bullet.prototype.acts.SetSpeed,
 	cr.system_object.prototype.acts.ScrollToObject,
-	cr.plugins_.Sprite.prototype.acts.SetOpacity,
 	cr.behaviors.Bullet.prototype.exps.Speed,
-	cr.plugins_.Sprite.prototype.cnds.IsOutsideLayout,
+	cr.system_object.prototype.exps.newline,
 	cr.plugins_.Sprite.prototype.acts.SetPos,
-	cr.plugins_.Sprite.prototype.exps.X,
 	cr.plugins_.Sprite.prototype.exps.Y,
+	cr.plugins_.Sprite.prototype.cnds.CompareOpacity,
 	cr.plugins_.LocalStorage.prototype.acts.CheckItemExists,
 	cr.plugins_.LocalStorage.prototype.cnds.OnItemMissing,
 	cr.plugins_.LocalStorage.prototype.cnds.OnItemRemoved,
 	cr.plugins_.Dictionary.prototype.acts.AddKey,
-	cr.system_object.prototype.exps["int"],
 	cr.plugins_.LocalStorage.prototype.acts.SetItem,
 	cr.plugins_.Dictionary.prototype.exps.AsJSON,
 	cr.plugins_.LocalStorage.prototype.cnds.OnItemExists,
