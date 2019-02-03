@@ -42,7 +42,7 @@ Real Drag Race is a PvP drag race with a photon engine as a server. this is the 
 
 
 ## DEMO
-[CLICK HERE](https://marmisdev.github.io/Real-Drag-Race)
+[CLICK HERE](https://marmisdev.github.io/Real-Drag-Race) or [CLICK HERE](https://www.scirra.com/arcade/multiplayer-games/real-drag-race-38312)
 
 
 ```prototype drag racing (photon) v2.0.0```
