@@ -25,11 +25,11 @@ Real Drag Race is a PvP drag race with a photon engine as a server. this is the 
 
 ## Next Features
 
- - Online leaderboard (Global, Region, Car types & Car name). ```Start Date (4-Feb-2019)```
- - Tell the name of the winner to global. ```Start Date (7-Feb-2019)```
- - Add spec for each car (speed, A/M, year, type of car, etc). ```Start Date (9-Feb-2019)```
- - Add new car. ```Start Date (10-Feb-2019)```
- - Online saving. ```Start Date (-/-/2019)```
+ - Online leaderboard (Global, Region, Car types & Car name). 
+ - Tell the name of the winner to global. 
+ - Add spec for each car (speed, A/M, year, type of car, etc). 
+ - Add new car. 
+ - Online saving. 
  - Next ?? -
 
 
